@@ -1,0 +1,6 @@
+{
+  "name": "Bunny Ben",
+  "description": "An interactive, talking virtual pet rabbit named Ben, inspired by Talking Tom. Feed, pet, dress up, play mini-games, and converse in real-time powered by Gemini AI!",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
