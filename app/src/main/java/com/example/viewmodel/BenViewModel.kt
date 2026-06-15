@@ -1,6 +1,8 @@
 package com.example.viewmodel
 
 import android.app.Application
+import android.speech.tts.TextToSpeech
+import android.speech.tts.UtteranceProgressListener
 import androidx.compose.runtime.mutableStateListOf
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -9,6 +11,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
+import java.util.Locale
 import kotlin.random.Random
 
 // Represents Ben's currently visual animation state
@@ -19,7 +22,10 @@ enum class BenAnimation {
     TICKLED,     // When tummy or ears are tapped
     SLEEPING,    // Light sleep/heavy nap
     THINKING,    // Talking to AI
-    TALKING      // When speaking a speech bubble response
+    TALKING,     // When speaking a speech bubble response
+    DIZZY,       // When swiped or spun
+    WAVING,      // Friendly arm wave greeting
+    DANCING      // Happy dancing state
 }
 
 // Data class for a Whack-A-Carrot item
@@ -35,7 +41,10 @@ data class GameTarget(
 enum class TargetType {
     REGULAR_CARROT,
     GOLDEN_CARROT,
-    TOXIC_WEED
+    TOXIC_WEED,
+    FREEZE_CLOCK,
+    DOUBLE_STAR,
+    TNT_BOMB
 }
 
 class BenViewModel(application: Application) : AndroidViewModel(application) {
@@ -58,6 +67,13 @@ class BenViewModel(application: Application) : AndroidViewModel(application) {
     // Current visual action/animation state
     private val _animationState = MutableStateFlow(BenAnimation.IDLE)
     val animationState: StateFlow<BenAnimation> = _animationState.asStateFlow()
+
+    // TTS engine states
+    private var tts: TextToSpeech? = null
+    private val _isSpeakingTts = MutableStateFlow(false)
+    val isSpeakingTts: StateFlow<Boolean> = _isSpeakingTts.asStateFlow()
+    private val _ttsMuted = MutableStateFlow(false)
+    val ttsMuted: StateFlow<Boolean> = _ttsMuted.asStateFlow()
 
     // Loading indicator for AI network calls
     private val _isChatLoading = MutableStateFlow(false)
@@ -118,11 +134,106 @@ class BenViewModel(application: Application) : AndroidViewModel(application) {
                 ))
             }
         }
+
+        // Initialize TextToSpeech engine
+        tts = TextToSpeech(application) { status ->
+            if (status == TextToSpeech.SUCCESS) {
+                tts?.language = Locale.US
+                tts?.setPitch(1.4f)
+                tts?.setSpeechRate(1.15f)
+                tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
+                    override fun onStart(utteranceId: String?) {
+                        _isSpeakingTts.value = true
+                    }
+
+                    override fun onDone(utteranceId: String?) {
+                        _isSpeakingTts.value = false
+                    }
+
+                    @Deprecated("Deprecated in Java")
+                    override fun onError(utteranceId: String?) {
+                        _isSpeakingTts.value = false
+                    }
+
+                    override fun onError(utteranceId: String?, errorCode: Int) {
+                        _isSpeakingTts.value = false
+                    }
+                })
+            }
+        }
+
+        // Collect stateFlow to auto-unlock achievements
+        viewModelScope.launch {
+            stateFlow.collect { state ->
+                if (state.totalFeeds >= 1 && !state.achievementsCsv.contains("first_feed")) {
+                    repository.unlockAchievement("first_feed")
+                }
+                if (state.level >= 5 && !state.achievementsCsv.contains("level_5")) {
+                    repository.unlockAchievement("level_5")
+                }
+                if (state.highScore >= 50 && !state.achievementsCsv.contains("arcade_master")) {
+                    repository.unlockAchievement("arcade_master")
+                }
+                val outfitCount = state.unlockedOutfitsCsv.split(",").filter { it.isNotBlank() }.size
+                if (outfitCount > 1 && !state.achievementsCsv.contains("outfit_unlock")) {
+                    repository.unlockAchievement("outfit_unlock")
+                }
+                if (state.unlockedOutfitsCsv.contains("superhero") && !state.achievementsCsv.contains("super_bunny")) {
+                    repository.unlockAchievement("super_bunny")
+                }
+                if (state.environmentId == "cyber_studio" && !state.achievementsCsv.contains("cyber_bunny")) {
+                    repository.unlockAchievement("cyber_bunny")
+                }
+            }
+        }
+    }
+
+    fun speakText(text: String) {
+        if (_ttsMuted.value) return
+        val cleanText = text.replace(Regex("\\*.*?\\*"), "").trim()
+        if (cleanText.isEmpty()) return
+        
+        val params = android.os.Bundle()
+        params.putString(TextToSpeech.Engine.KEY_PARAM_UTTERANCE_ID, "ben_speech_bubble")
+        tts?.speak(cleanText, TextToSpeech.QUEUE_FLUSH, params, "ben_speech_bubble")
+    }
+
+    fun toggleTtsMute() {
+        _ttsMuted.value = !_ttsMuted.value
+        if (_ttsMuted.value) {
+            stopSpeaking()
+        }
+    }
+
+    fun stopSpeaking() {
+        tts?.stop()
+        _isSpeakingTts.value = false
+    }
+
+    fun triggerDizzy() {
+        if (_isPlayingGame.value || _animationState.value == BenAnimation.SLEEPING) return
+        interactionBubble("Whoa! Everything is spinning around... Squeak! *holds head*", BenAnimation.DIZZY, 3000)
+    }
+
+    fun triggerWaving() {
+        if (_isPlayingGame.value || _animationState.value == BenAnimation.SLEEPING) return
+        interactionBubble("Hi there! Squeak! I'm waving to my favorite owner! *waves paw*", BenAnimation.WAVING, 3000)
+    }
+
+    fun triggerDancing() {
+        if (_isPlayingGame.value || _animationState.value == BenAnimation.SLEEPING) return
+        interactionBubble("Boing boing! Look at my happy dance! *dances*", BenAnimation.DANCING, 4000)
+    }
+
+    fun triggerJump() {
+        if (_isPlayingGame.value || _animationState.value == BenAnimation.SLEEPING) return
+        interactionBubble("Boing! Higher and higher! *hops high*", BenAnimation.HAPPY, 2500)
     }
 
     fun interactionBubble(msg: String, anim: BenAnimation = BenAnimation.TALKING, duration: Long = 4000) {
         _speechBubble.value = msg
         _animationState.value = anim
+        speakText(msg)
         viewModelScope.launch {
             delay(duration)
             if (_speechBubble.value == msg) {
@@ -179,6 +290,7 @@ class BenViewModel(application: Application) : AndroidViewModel(application) {
 
     fun putToSleep() {
         if (_isPlayingGame.value) return
+        stopSpeaking()
         viewModelScope.launch {
             repository.putToSleep()
             _animationState.value = BenAnimation.SLEEPING
@@ -190,7 +302,9 @@ class BenViewModel(application: Application) : AndroidViewModel(application) {
         if (_isPlayingGame.value) return
         if (_animationState.value == BenAnimation.SLEEPING) {
             _animationState.value = BenAnimation.IDLE
-            _speechBubble.value = "Squeak! Good morning! I'm fully rested and ready to hop!"
+            val wakeMsg = "Squeak! Good morning! I'm fully rested and ready to hop!"
+            _speechBubble.value = wakeMsg
+            speakText(wakeMsg)
         }
     }
 
@@ -231,24 +345,38 @@ class BenViewModel(application: Application) : AndroidViewModel(application) {
             _animationState.value = BenAnimation.THINKING
             _speechBubble.value = "Thinking..."
 
+            // Format current state context
+            val state = stateFlow.value
+            val petContext = "Level=${state.level}, Outfit=${state.selectedOutfitId}, Hunger=${(state.hunger * 100).toInt()}% (100% is full, 0% is starving), Happiness=${(state.happiness * 100).toInt()}% (100% is extremely happy), Energy=${(state.energy * 100).toInt()}% (100% is wide awake, 0% is exhausted)."
+
             // Send to Gemini
-            val reply = GeminiClient.chatWithBen(message)
+            val reply = GeminiClient.chatWithBen(message, petContext)
             _isChatLoading.value = false
             _speechBubble.value = reply
             _animationState.value = BenAnimation.TALKING
+            speakText(reply)
         }
     }
 
     // --- MINI-GAME CONTROLLERS ---
+    private val _isDoublePointsActive = MutableStateFlow(false)
+    val isDoublePointsActive: StateFlow<Boolean> = _isDoublePointsActive.asStateFlow()
+
+    private val _isTimeFrozenActive = MutableStateFlow(false)
+    val isTimeFrozenActive: StateFlow<Boolean> = _isTimeFrozenActive.asStateFlow()
+
     fun startMiniGame() {
         if (stateFlow.value.energy < 0.15f) {
             interactionBubble("Zzz... Ben is too tired to play games! Put me to sleep first!", BenAnimation.IDLE)
             return
         }
 
+        stopSpeaking()
         _activeTargets.value = emptyList()
         _gameScore.value = 0
         _gameTimeLeft.value = 20
+        _isDoublePointsActive.value = false
+        _isTimeFrozenActive.value = false
         _isPlayingGame.value = true
         _animationState.value = BenAnimation.IDLE
         _speechBubble.value = null
@@ -257,7 +385,11 @@ class BenViewModel(application: Application) : AndroidViewModel(application) {
             var counter = 0
             while (_gameTimeLeft.value > 0) {
                 delay(1000)
-                _gameTimeLeft.value -= 1
+                if (_isTimeFrozenActive.value) {
+                    // Time is frozen, do not decrement time left
+                } else {
+                    _gameTimeLeft.value -= 1
+                }
                 counter++
 
                 // Spawn carrots dynamically
@@ -265,9 +397,11 @@ class BenViewModel(application: Application) : AndroidViewModel(application) {
                     spawnTarget()
                 }
 
-                // Autoclear expired targets (say 3 seconds old)
-                val now = System.currentTimeMillis()
-                _activeTargets.value = _activeTargets.value.filter { now - it.addedTime <= 2500 }
+                // Autoclear expired targets (if time is frozen, targets don't expire to let the player whack them!)
+                if (!_isTimeFrozenActive.value) {
+                    val now = System.currentTimeMillis()
+                    _activeTargets.value = _activeTargets.value.filter { now - it.addedTime <= 2500 }
+                }
             }
             endMiniGame()
         }
@@ -276,28 +410,40 @@ class BenViewModel(application: Application) : AndroidViewModel(application) {
     private fun spawnTarget() {
         val count = randomGenerator.nextInt(1, 3)
         val newTargetsList = _activeTargets.value.toMutableList()
+        val score = _gameScore.value
+        val isBonusRound = score >= 50
+
         for (i in 0 until count) {
-            val isGolden = randomGenerator.nextFloat() < 0.15f // 15% gold carrot chance
-            val isWeed = randomGenerator.nextFloat() < 0.20f   // 20% weed risk factor
-            
-            val type = when {
-                isGolden -> TargetType.GOLDEN_CARROT
-                isWeed -> TargetType.TOXIC_WEED
-                else -> TargetType.REGULAR_CARROT
+            val type = if (isBonusRound) {
+                // Bonus Round: 85% Golden Carrots, 15% Weed hazards (no other powerups spawn)
+                if (randomGenerator.nextFloat() < 0.85f) TargetType.GOLDEN_CARROT else TargetType.TOXIC_WEED
+            } else {
+                val rand = randomGenerator.nextFloat()
+                when {
+                    rand < 0.06f -> TargetType.FREEZE_CLOCK
+                    rand < 0.12f -> TargetType.DOUBLE_STAR
+                    rand < 0.18f -> TargetType.TNT_BOMB
+                    rand < 0.30f -> TargetType.GOLDEN_CARROT
+                    rand < 0.48f -> TargetType.TOXIC_WEED
+                    else -> TargetType.REGULAR_CARROT
+                }
             }
 
             val points = when (type) {
                 TargetType.REGULAR_CARROT -> 5
                 TargetType.GOLDEN_CARROT -> 20
                 TargetType.TOXIC_WEED -> -10
+                TargetType.FREEZE_CLOCK -> 10
+                TargetType.DOUBLE_STAR -> 15
+                TargetType.TNT_BOMB -> 25
             }
 
             val target = GameTarget(
                 id = randomGenerator.nextInt(100000),
                 type = type,
                 xOffset = randomGenerator.nextFloat() * 80f + 10f, // 10% to 90%
-                yOffset = randomGenerator.nextFloat() * 60f + 15f  // 15% to 75%
-                ,points = points
+                yOffset = randomGenerator.nextFloat() * 60f + 15f,  // 15% to 75%
+                points = points
             )
             newTargetsList.add(target)
         }
@@ -307,9 +453,44 @@ class BenViewModel(application: Application) : AndroidViewModel(application) {
     fun whackTarget(targetId: Int) {
         val target = _activeTargets.value.find { it.id == targetId } ?: return
         _activeTargets.value = _activeTargets.value - target
-        
-        _gameScore.value = (_gameScore.value + target.points).coerceAtLeast(0)
-        
+
+        val multiplier = if (_isDoublePointsActive.value) 2 else 1
+        val pointsGained = target.points * multiplier
+        if (pointsGained > 0) {
+            _gameScore.value += pointsGained
+        } else {
+            _gameScore.value = (_gameScore.value + pointsGained).coerceAtLeast(0)
+        }
+
+        // Process special powerup triggers
+        when (target.type) {
+            TargetType.FREEZE_CLOCK -> {
+                _isTimeFrozenActive.value = true
+                viewModelScope.launch {
+                    delay(4000) // freeze time countdown for 4 seconds
+                    _isTimeFrozenActive.value = false
+                }
+            }
+            TargetType.DOUBLE_STAR -> {
+                _isDoublePointsActive.value = true
+                viewModelScope.launch {
+                    delay(6000) // double points active for 6 seconds
+                    _isDoublePointsActive.value = false
+                }
+            }
+            TargetType.TNT_BOMB -> {
+                // Instantly whack all active regular/golden targets on screen, giving points
+                val targetsToWhack = _activeTargets.value.filter { it.type != TargetType.TNT_BOMB && it.type != TargetType.TOXIC_WEED }
+                targetsToWhack.forEach { t ->
+                    val mult = if (_isDoublePointsActive.value) 2 else 1
+                    _gameScore.value += t.points * mult
+                }
+                // Clear the board of whacked items
+                _activeTargets.value = _activeTargets.value.filter { it.type == TargetType.TOXIC_WEED }
+            }
+            else -> { /* carrots/weeds handled by default point additions */ }
+        }
+
         // Flash interactive feedback on Ben
         _animationState.value = if (target.type == TargetType.TOXIC_WEED) BenAnimation.TICKLED else BenAnimation.HAPPY
         viewModelScope.launch {
@@ -330,7 +511,7 @@ class BenViewModel(application: Application) : AndroidViewModel(application) {
         val coinsWon = (scoreValue / 2).coerceAtLeast(5)
 
         viewModelScope.launch {
-            val updated = repository.playMiniGame(coinsWon)
+            val updated = repository.playMiniGame(coinsWon, scoreValue)
             interactionBubble("Game Over! Score: $scoreValue! Squeak! You won $coinsWon coins!", BenAnimation.HAPPY, 4500)
         }
     }
@@ -420,6 +601,107 @@ class BenViewModel(application: Application) : AndroidViewModel(application) {
     override fun onCleared() {
         super.onCleared()
         gameLoopJob?.cancel()
+        tts?.stop()
+        tts?.shutdown()
+    }
+
+    // Achievements calculation
+    fun getAchievementsList(state: BenStateEntity): List<Achievement> {
+        return listOf(
+            Achievement("first_feed", "Carrot Feast 🥕", "Feed Ben at least once", "🥕", state.totalFeeds >= 1),
+            Achievement("level_5", "Growing Up 🎂", "Reach Level 5", "🎂", state.level >= 5),
+            Achievement("arcade_master", "Arcade Master 🎮", "Score 50+ in Whack-A-Carrot", "🎮", state.highScore >= 50),
+            Achievement("outfit_unlock", "Fancy Dresser 🎩", "Unlock a custom outfit", "🎩", state.unlockedOutfitsCsv.split(",").filter { it.isNotBlank() }.size > 1),
+            Achievement("super_bunny", "Super Rabbit 🦸", "Own the Superhero Cape", "🦸", state.unlockedOutfitsCsv.split(",").contains("superhero")),
+            Achievement("cyber_bunny", "Cosmic Explorer 🌃", "Set Neon Cyber Grid environment", "🌃", state.environmentId == "cyber_studio")
+        )
+    }
+
+    // Leaderboard calculation
+    fun getLeaderboard(state: BenStateEntity): List<LeaderboardEntry> {
+        val playerEntry = LeaderboardEntry(0, "You (Ben)", state.level, state.highScore, true)
+        val botEntries = listOf(
+            LeaderboardEntry(0, "Talking Tom 🐱", 15, 80, false),
+            LeaderboardEntry(0, "Angela 🐈", 12, 65, false),
+            LeaderboardEntry(0, "Ginger 🐕", 5, 30, false),
+            LeaderboardEntry(0, "Hank 🐶", 3, 15, false)
+        )
+        val allEntries = (botEntries + playerEntry).sortedByDescending { it.score * 1000 + it.level }
+        return allEntries.mapIndexed { index, entry ->
+            entry.copy(rank = index + 1)
+        }
+    }
+
+    // Friends visit & gift actions
+    val friendsCatalog = listOf(
+        Friend("tom", "Talking Tom", 15, "Fancy Gentleman", "🐱", "Meow! My bunny is resting. Let's trade carrots!", 30),
+        Friend("angela", "Angela", 12, "Classic White Fur", "🐈", "Bonjour! How is your Bunny Ben doing today?", 40),
+        Friend("ginger", "Ginger", 5, "Classic White Fur", "🐕", "Haha! Play some Whack-A-Carrot with me!", 20),
+        Friend("hank", "Hank", 3, "Classic White Fur", "🐶", "Whoa, look at your cool outfit! Squeak!", 15)
+    )
+
+    fun visitFriend(friendId: String) {
+        val friend = friendsCatalog.firstOrNull { it.id == friendId } ?: return
+        viewModelScope.launch {
+            val current = repository.getBenState()
+            val newCoins = current.coins + friend.giftRewardCoins
+            val newXp = current.xp + 25
+            
+            // Calculate new level progress
+            var level = current.level.coerceAtLeast(1)
+            var xp = newXp.coerceAtLeast(0)
+            var xpNeeded = level * 100
+            var iterations = 0
+            while (xp >= xpNeeded && iterations < 500) {
+                xp -= xpNeeded
+                level++
+                xpNeeded = level * 100
+                iterations++
+            }
+
+            val updated = current.copy(coins = newCoins, xp = xp, level = level)
+            repository.saveBenState(updated)
+            interactionBubble("Visited ${friend.name}! ${friend.dialog} You received +${friend.giftRewardCoins} coins and +25 XP!", BenAnimation.HAPPY, 5000)
+        }
+    }
+
+    fun giftFriend(friendId: String) {
+        val friend = friendsCatalog.firstOrNull { it.id == friendId } ?: return
+        viewModelScope.launch {
+            val current = repository.getBenState()
+            if (current.coins < 25) {
+                interactionBubble("Oops! You need 25 coins to gift ${friend.name}!", BenAnimation.IDLE)
+                return@launch
+            }
+            val newCoins = current.coins - 25
+            val newXp = current.xp + 60
+
+            // Calculate new level progress
+            var level = current.level.coerceAtLeast(1)
+            var xp = newXp.coerceAtLeast(0)
+            var xpNeeded = level * 100
+            var iterations = 0
+            while (xp >= xpNeeded && iterations < 500) {
+                xp -= xpNeeded
+                level++
+                xpNeeded = level * 100
+                iterations++
+            }
+
+            val updated = current.copy(coins = newCoins, xp = xp, level = level)
+            repository.saveBenState(updated)
+            interactionBubble("Gave a gift to ${friend.name}! They love it! You earned +60 XP!", BenAnimation.HAPPY, 5000)
+        }
+    }
+
+    fun shareBenStats(context: android.content.Context) {
+        val state = stateFlow.value
+        val text = "🐰 Check out my virtual pet rabbit Bunny Ben! He is Level ${state.level}, has ${state.coins} coins, and unlocked ${state.selectedOutfitId} outfit! Can you beat my high score of ${state.highScore} in Whack-A-Carrot? Join the fun! ✨"
+        val intent = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+            type = "text/plain"
+            putExtra(android.content.Intent.EXTRA_TEXT, text)
+        }
+        context.startActivity(android.content.Intent.createChooser(intent, "Share Bunny Ben Stats"))
     }
 }
 
@@ -456,4 +738,30 @@ data class FoodItem(
     val desc: String,
     val coinCost: Int,
     val statBenefit: String
+)
+
+data class Achievement(
+    val id: String,
+    val title: String,
+    val desc: String,
+    val icon: String,
+    val isUnlocked: Boolean
+)
+
+data class Friend(
+    val id: String,
+    val name: String,
+    val level: Int,
+    val outfit: String,
+    val emoji: String,
+    val dialog: String,
+    val giftRewardCoins: Int
+)
+
+data class LeaderboardEntry(
+    val rank: Int,
+    val name: String,
+    val level: Int,
+    val score: Int,
+    val isPlayer: Boolean
 )

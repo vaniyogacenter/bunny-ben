@@ -78,17 +78,31 @@ object GeminiClient {
         Act as if you are listening to your owner and reacting playfully.
     """
 
-    suspend fun chatWithBen(prompt: String): String {
+    suspend fun chatWithBen(prompt: String, petContext: String = ""): String {
         val apiKey: String? = try { BuildConfig.GEMINI_API_KEY } catch (e: Throwable) { null }
         if (apiKey.isNullOrBlank() || apiKey == "MY_GEMINI_API_KEY" || apiKey == "GEMINI_API_KEY") {
-            return getLocalRabbitResponse()
+            return getLocalRabbitResponse(petContext)
+        }
+
+        val systemInstructionText = if (petContext.isNotBlank()) {
+            val outfitBackstory = when {
+                petContext.contains("Outfit=superhero") -> "You are currently wearing a Superhero Cape. Act brave, heroic, energetic, and talk about flying, jumping, or saving carrots."
+                petContext.contains("Outfit=gentleman") -> "You are currently wearing a Fancy Gentleman top-hat and black bowtie. Act polite, sophisticated, say things like 'Good day, chap!' or 'Indeed', and refer to yourself with high standards."
+                petContext.contains("Outfit=wizard") -> "You are currently wearing a Wizard Scholar starry cap. Act magical, speak about spells, wizardry, magic wands, or brewing carrot potions."
+                petContext.contains("Outfit=cyber") -> "You are currently wearing a Cyber Rabbit neon visor. Act futuristic, say 'beep boop', talk about system scans, databases, or cyber carrot sensors."
+                else -> ""
+            }
+            val statusComments = "If hunger is low (below 40%), complain about being hungry. If energy is low (below 30%), mention being tired and wanting a nap."
+            "$BEN_BACKSTORY\nYour current physical and emotional state is: $petContext.\n$outfitBackstory\n$statusComments\nMake sure to respond and behave accordingly (e.g. comment on your hunger, tiredness, or outfit if relevant)."
+        } else {
+            BEN_BACKSTORY
         }
 
         val request = GeminiRequest(
             contents = listOf(
                 GeminiContent(parts = listOf(GeminiPart(text = prompt)))
             ),
-            systemInstruction = GeminiContent(parts = listOf(GeminiPart(text = BEN_BACKSTORY)))
+            systemInstruction = GeminiContent(parts = listOf(GeminiPart(text = systemInstructionText)))
         )
 
         return try {
@@ -101,20 +115,60 @@ object GeminiClient {
             }
         } catch (e: Exception) {
             e.printStackTrace()
-            getLocalRabbitResponse()
+            getLocalRabbitResponse(petContext)
         }
     }
 
-    private fun getLocalRabbitResponse(): String {
-        val responses = listOf(
-            "Squeak! *wiggles long pink ears* I was just thinking about crunchy orange carrots!",
-            "Boing! *hops around* Pet me on my soft tummy, I am super ticklish!",
-            "*thumps paw* Let's play the Whack-A-Carrot game, I want to collect gold coins!",
-            "Yawn... chewing makes me feel relaxed and sleepy. Let's do a power nap!",
-            "Squeak! *nibbles a sweet cookie* Double chocolate cookies are my absolute favorite!",
-            "*sniffs air rapid-fire* I smell a delicious cupcake nearby!",
-            "*stands on hind legs* You are my absolute best friend in this entire world!"
-        )
+    private fun getLocalRabbitResponse(petContext: String = ""): String {
+        val outfit = Regex("Outfit=([^,\\s]+)").find(petContext)?.groupValues?.get(1) ?: "classic"
+        val hunger = Regex("Hunger=(\\d+)").find(petContext)?.groupValues?.get(1)?.toIntOrNull() ?: 100
+        val energy = Regex("Energy=(\\d+)").find(petContext)?.groupValues?.get(1)?.toIntOrNull() ?: 100
+        val happiness = Regex("Happiness=(\\d+)").find(petContext)?.groupValues?.get(1)?.toIntOrNull() ?: 100
+        val level = Regex("Level=(\\d+)").find(petContext)?.groupValues?.get(1)?.toIntOrNull() ?: 1
+
+        val responses = mutableListOf<String>()
+
+        // Add context-specific responses if condition met
+        if (hunger < 40) {
+            responses.add("Squeak... my tummy is thumping. Can you feed me some delicious snacks?")
+            responses.add("Boing! *tummy rumbles* I am starving! Let's eat a crispy orange carrot or cookie!")
+        }
+        if (energy < 30) {
+            responses.add("Yawn... *droops ears* Ben is so tired and sleepy. Let's do a cozy nap...")
+            responses.add("*yawns* My energy is running low. Put me to bed so I can recharge!")
+        }
+        if (happiness < 40) {
+            responses.add("*thumps paw sadly* I'm feeling a bit lonely. Let's play Whack-A-Carrot or pet me!")
+            responses.add("Squeak... *sad ears* A little petting or some sweet cookies would make me feel much better!")
+        }
+
+        // Outfit responses
+        when (outfit) {
+            "superhero" -> {
+                responses.add("Boing! *poses heroically with cape* With my Superhero Cape, I can leap over tall carrots!")
+                responses.add("Squeak! The Cape makes me feel super fast! Let's protect the carrot garden!")
+            }
+            "gentleman" -> {
+                responses.add("*adjusts bowtie* A gentleman rabbit always prefers his cookies served on a silver platter.")
+                responses.add("Good day, chap! *tips top hat* Do you think my blue hat matches my whiskers?")
+            }
+            "wizard" -> {
+                responses.add("*swings wand* Abracadabra! Let there be a rain of delicious crunchy carrots!")
+                responses.add("A wizard rabbit is never late, he arrives precisely when he intends to! *squeaks*")
+            }
+            "cyber" -> {
+                responses.add("*neon visor glows* System online! Cyber Ben is ready to scan for cupcakes!")
+                responses.add("Beep boop! *wiggles ears* My cyber visor detected high carrot concentrations nearby!")
+            }
+        }
+
+        // Generic fallback responses
+        responses.add("Squeak! *wiggles long pink ears* I was just thinking about crunchy orange carrots!")
+        responses.add("Boing! *hops around* Pet me on my soft tummy, I am super ticklish!")
+        responses.add("*thumps paw* Let's play the Whack-A-Carrot game, I want to collect gold coins!")
+        responses.add("Squeak! *nibbles a sweet cookie* Double chocolate cookies are my absolute favorite!")
+        responses.add("*stands on hind legs* You are my absolute best friend in this entire world! (We are Level $level!)")
+
         return responses.random()
     }
 }

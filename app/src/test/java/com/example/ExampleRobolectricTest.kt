@@ -65,7 +65,7 @@ class ExampleRobolectricTest {
                 } else if (index % 3 == 1) {
                     repository.feedBen("carrot")
                 } else {
-                    repository.playMiniGame(10)
+                    repository.playMiniGame(10, 10)
                 }
             }
         }

@@ -14,5 +14,8 @@ data class BenStateEntity(
     val energy: Float = 0.8f,     // 1.0f is wide awake, 0.0f is asleep
     val selectedOutfitId: String = "classic",
     val unlockedOutfitsCsv: String = "classic",
-    val environmentId: String = "classic_meadow"
+    val environmentId: String = "classic_meadow",
+    val highScore: Int = 0,
+    val totalFeeds: Int = 0,
+    val achievementsCsv: String = ""
 )

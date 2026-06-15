@@ -45,13 +45,14 @@ class BenRepository(private val benDao: BenDao) {
             coins = current.coins - cost,
             xp = updatedXp,
             level = newLevel,
+            totalFeeds = current.totalFeeds + 1,
             happiness = (current.happiness + 0.05f).coerceAtMost(1.0f)
         )
         saveBenState(updated)
         return Result.success(updated)
     }
 
-    suspend fun playMiniGame(earnedCoins: Int): BenStateEntity {
+    suspend fun playMiniGame(earnedCoins: Int, score: Int): BenStateEntity {
         val current = getBenState()
         val newXp = current.xp + (earnedCoins * 2)
         val (newLevel, updatedXp) = calculateLevelProgress(current.level, newXp)
@@ -60,8 +61,23 @@ class BenRepository(private val benDao: BenDao) {
             coins = current.coins + earnedCoins,
             xp = updatedXp,
             level = newLevel,
+            highScore = maxOf(current.highScore, score),
             happiness = (current.happiness + 0.25f).coerceAtMost(1.0f),
             energy = (current.energy - 0.20f).coerceAtLeast(0.1f)
+        )
+        saveBenState(updated)
+        return updated
+    }
+
+    suspend fun unlockAchievement(achievementId: String): BenStateEntity {
+        val current = getBenState()
+        val achievementsList = current.achievementsCsv.split(",").filter { it.isNotBlank() }.toMutableSet()
+        if (achievementsList.contains(achievementId)) {
+            return current
+        }
+        achievementsList.add(achievementId)
+        val updated = current.copy(
+            achievementsCsv = achievementsList.joinToString(",")
         )
         saveBenState(updated)
         return updated
